@@ -242,6 +242,7 @@ struct php_v8js_object {
 };
 /* }}} */
 
+/* Resource declaration */
 
 /* Module globals */
 ZEND_BEGIN_MODULE_GLOBALS(v8js)
@@ -280,6 +281,11 @@ ZEND_EXTERN_MODULE_GLOBALS(v8js)
 
 /* Register builtin methods into passed object */
 void php_v8js_register_methods(v8::Handle<v8::ObjectTemplate>, php_v8js_ctx *c);
+
+typedef struct _php_v8js_script {
+	char *name;
+	v8::Persistent<v8::Script, v8::CopyablePersistentTraits<v8::Script>> *script;
+} php_v8js_script;
 
 #endif	/* PHP_V8JS_MACROS_H */
 
