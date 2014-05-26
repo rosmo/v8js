@@ -1236,6 +1236,7 @@ static PHP_METHOD(V8Js, compileString)
 
 	v8::String::Utf8Value _sname(sname);
 	res->name = estrndup(ToCString(_sname), _sname.length());
+	res->isolate = c->isolate;
 
 	ZEND_REGISTER_RESOURCE(return_value, res, le_v8js_script);
 }
@@ -1259,6 +1260,10 @@ static PHP_METHOD(V8Js, executeScript)
 	ZEND_VERIFY_RESOURCE(res);
 
 	V8JS_BEGIN_CTX(c, getThis())
+
+	if (res->isolate != c->isolate) {
+		RETURN_FALSE;
+	}
 
 	V8JSG(timer_mutex).lock();
 	c->time_limit_hit = false;
