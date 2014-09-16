@@ -624,7 +624,11 @@ static void php_v8js_free_storage(void *object TSRMLS_DC) /* {{{ */
 	{
 		v8::Locker locker(c->isolate);
 		v8::Isolate::Scope isolate_scope(c->isolate);
+#if PHP_V8_API_VERSION < 3028036
 		while(!v8::V8::IdleNotification()) {};
+#else
+		while(!c->isolate->IdleNotification(500)) {};
+#endif
 	}
 
 	/* Dispose yet undisposed weak refs */
@@ -924,7 +928,7 @@ static PHP_METHOD(V8Js, __construct)
 
 	/* Add the PHP object into global object */
 	v8::Local<v8::Object> php_obj = php_obj_t->InstanceTemplate()->NewInstance();
-	V8JS_GLOBAL(isolate)->Set(object_name_js, php_obj, v8::ReadOnly);
+	V8JS_GLOBAL(isolate)->ForceSet(object_name_js, php_obj, v8::ReadOnly);
 
 	/* Export public property values */
 	HashTable *properties = zend_std_get_properties(getThis() TSRMLS_CC);

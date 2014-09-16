@@ -42,6 +42,8 @@ static void php_v8js_error_handler(int error_num, const char *error_filename,
 	char *buffer;
 	int buffer_len;
 
+	TSRMLS_FETCH();
+
 	switch (error_num)
 	{
 		case E_ERROR:
@@ -483,20 +485,37 @@ static void php_v8js_named_property_enumerator(const v8::PropertyCallbackInfo<v8
 
 static void php_v8js_invoke_callback(const v8::FunctionCallbackInfo<v8::Value>& info) /* {{{ */
 {
+	v8::Isolate *isolate = info.GetIsolate();
 	v8::Local<v8::Object> self = info.Holder();
 	v8::Local<v8::Function> cb = v8::Local<v8::Function>::Cast(info.Data());
 	int argc = info.Length(), i;
 	v8::Local<v8::Value> argv[argc];
 	v8::Local<v8::Value> result;
 
+	V8JS_TSRMLS_FETCH();
+
 	for (i=0; i<argc; i++) {
 		argv[i] = info[i];
 	}
-	if (info.IsConstructCall() && self->GetConstructor()->IsFunction()) {
-		// this is a 'new obj(...)' invocation.  Handle this like PHP does;
-		// that is, treat it as synonymous with 'new obj.constructor(...)'
-		cb = v8::Local<v8::Function>::Cast(self->GetConstructor());
-		result = cb->NewInstance(argc, argv);
+
+	if (info.IsConstructCall()) {
+#if PHP_V8_API_VERSION <= 3023008
+		/* Until V8 3.23.8 Isolate could only take one external pointer. */
+		php_v8js_ctx *ctx = (php_v8js_ctx *) isolate->GetData();
+#else
+		php_v8js_ctx *ctx = (php_v8js_ctx *) isolate->GetData(0);
+#endif
+
+		v8::String::Utf8Value str(self->GetConstructorName()->ToString());
+		const char *constructor_name = ToCString(str);
+
+		zend_class_entry **pce;
+		zend_lookup_class(constructor_name, str.length(), &pce TSRMLS_CC);
+		v8::Local<v8::FunctionTemplate> new_tpl;
+		new_tpl = v8::Local<v8::FunctionTemplate>::New
+			(isolate, ctx->template_cache.at((*pce)->name));
+
+		result = new_tpl->GetFunction()->NewInstance(argc, argv);
 	} else {
 		result = cb->Call(self, argc, argv);
 	}
@@ -641,7 +660,9 @@ static inline v8::Local<v8::Value> php_v8js_named_property_callback(v8::Local<v8
 	) {
 		if (callback_type == V8JS_PROP_GETTER) {
 			if (is_constructor) {
-				ret_value = self->GetConstructor();
+				// Don't set a return value here, i.e. indicate that we don't
+				// have a special value.  V8 "knows" the constructor anyways
+				// (from the template) and will use that.
 			} else {
 				if (is_magic_call && method_ptr==NULL) {
 					// Fake __call implementation
@@ -724,11 +745,6 @@ static inline v8::Local<v8::Value> php_v8js_named_property_callback(v8::Local<v8
 				zend_call_function(&fci, NULL TSRMLS_CC);
 
 				ret_value = zval_to_v8js(php_value, isolate TSRMLS_CC);
-
-				/* We don't own the reference to php_value... unless the
-				 * returned refcount was 0, in which case the below code
-				 * will free it. */
-				zval_add_ref(&php_value);
 				zval_ptr_dtor(&php_value);
 			}
 		} else if (callback_type == V8JS_PROP_SETTER) {
@@ -775,13 +791,7 @@ static inline v8::Local<v8::Value> php_v8js_named_property_callback(v8::Local<v8
 					fci.no_separation = 1;
 
 					zend_call_function(&fci, NULL TSRMLS_CC);
-
 					ret_value = zval_to_v8js(php_ret_value, isolate TSRMLS_CC);
-
-					/* We don't own the reference to php_ret_value... unless the
-					 * returned refcount was 0, in which case the below code
-					 * will free it. */
-					zval_add_ref(&php_ret_value);
 					zval_ptr_dtor(&php_ret_value);
 				}
 			}
@@ -987,7 +997,7 @@ static v8::Handle<v8::Value> php_v8js_hash_to_jsobj(zval *value, v8::Isolate *is
 						}
 						continue;
 					}
-					newobj->Set(V8JS_STRL(key, key_len - 1), zval_to_v8js(*data, isolate TSRMLS_CC), v8::ReadOnly);
+					newobj->Set(V8JS_STRL(key, key_len - 1), zval_to_v8js(*data, isolate TSRMLS_CC));
 				} else {
 					newobj->Set(index, zval_to_v8js(*data, isolate TSRMLS_CC));
 				}
@@ -1067,8 +1077,10 @@ v8::Handle<v8::Value> zval_to_v8js(zval *value, v8::Isolate *isolate TSRMLS_DC) 
 				 if (instanceof_function(Z_OBJCE_P(value), ce TSRMLS_CC)) {
 					 zval *dtval;
 					 zend_call_method_with_0_params(&value, NULL, NULL, "getTimestamp", &dtval);
-					 if (dtval)
+					 if (dtval) {
 						 jsValue = V8JS_DATE(((double)Z_LVAL_P(dtval) * 1000.0));
+						 zval_ptr_dtor(&dtval);
+					 }
 					 else
 						 jsValue = V8JS_NULL;
 				 } else
